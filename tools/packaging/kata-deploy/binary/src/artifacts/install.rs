@@ -1374,14 +1374,15 @@ fn write_drop_in_file(config_d_dir: &str, filename: &str, content: &str) -> Resu
     Ok(())
 }
 
-/// Get the QEMU share directory name for a given shim.
-/// Some shims use experimental QEMU builds with different firmware paths.
-fn get_qemu_share_name(shim: &str) -> Option<String> {
+/// Get the name of the QEMU artifact a given shim is installed from.
+/// Every artifact other than "qemu" is a suffixed build, so the name is also
+/// the suffix of both its share directory and its qemu-system-* binary.
+fn get_qemu_artifact_name(shim: &str) -> Option<String> {
     if !is_qemu_shim(shim) {
         return None;
     }
 
-    let share_name = match shim {
+    let artifact_name = match shim {
         "qemu-nvidia-gpu-snp" => "qemu-snp-experimental",
         "qemu-nvidia-gpu-snp-runtime-rs" => "qemu-snp-experimental",
         "qemu-nvidia-gpu-tdx" => "qemu-tdx-experimental",
@@ -1389,18 +1390,22 @@ fn get_qemu_share_name(shim: &str) -> Option<String> {
         _ => "qemu",
     };
 
-    Some(share_name.to_string())
+    Some(artifact_name.to_string())
 }
 
 /// Create a QEMU wrapper script that adds the -L flag for firmware paths.
 /// This is needed when using a non-default installation prefix.
 fn create_qemu_wrapper_script(config: &Config, shim: &str) -> Result<Option<String>> {
-    let qemu_share = match get_qemu_share_name(shim) {
-        Some(share) => share,
+    let qemu_artifact = match get_qemu_artifact_name(shim) {
+        Some(artifact) => artifact,
         None => return Ok(None), // Not a QEMU shim, no wrapper needed
     };
 
-    let qemu_binary = format!("{}/bin/qemu-system-x86_64", config.dest_dir);
+    let binary_suffix = qemu_artifact.trim_start_matches("qemu");
+    let qemu_binary = format!(
+        "{}/bin/qemu-system-x86_64{}",
+        config.dest_dir, binary_suffix
+    );
     let wrapper_script_path = format!("{}-installation-prefix", qemu_binary);
     let host_wrapper_path = format!("/host{}", wrapper_script_path);
 
@@ -1416,7 +1421,7 @@ fn create_qemu_wrapper_script(config: &Config, shim: &str) -> Result<Option<Stri
 
 exec {} "$@" -L {}/share/kata-{}/qemu/
 "#,
-            qemu_binary, config.dest_dir, qemu_share
+            qemu_binary, config.dest_dir, qemu_artifact
         );
 
         fs::write(&host_wrapper_path, &script_content)?;
@@ -1896,6 +1901,27 @@ mod tests {
     #[case("remote", "remote")]
     fn test_get_hypervisor_name_other_hypervisors(#[case] shim: &str, #[case] expected: &str) {
         assert_eq!(get_hypervisor_name(shim).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case("qemu", "qemu")]
+    #[case("qemu-runtime-rs", "qemu")]
+    #[case("qemu-nvidia-cpu", "qemu")]
+    #[case("qemu-nvidia-cpu-runtime-rs", "qemu")]
+    #[case("qemu-nvidia-gpu-snp", "qemu-snp-experimental")]
+    #[case("qemu-nvidia-gpu-snp-runtime-rs", "qemu-snp-experimental")]
+    #[case("qemu-nvidia-gpu-tdx", "qemu-tdx-experimental")]
+    #[case("qemu-nvidia-gpu-tdx-runtime-rs", "qemu-tdx-experimental")]
+    fn test_get_qemu_artifact_name(#[case] shim: &str, #[case] expected: &str) {
+        assert_eq!(get_qemu_artifact_name(shim).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case("clh")]
+    #[case("dragonball")]
+    #[case("fc")]
+    fn test_get_qemu_artifact_name_non_qemu(#[case] shim: &str) {
+        assert!(get_qemu_artifact_name(shim).is_none());
     }
 
     #[rstest]
